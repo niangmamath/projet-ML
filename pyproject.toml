@@ -1,0 +1,43 @@
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--disable-warnings",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+markers = [
+    "slow: marque les tests qui chargent de vrais checkpoints",
+    "integration: necessite DB ou reseau",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+exclude = [
+    "venv",
+    ".venv",
+    "notebooks",
+    "huggingface_space/data",
+    "checkpoints",
+    "results",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E501",   # line too long - deja gere par la mise en forme
+    "E402",   # module level import not at top (sys.path tricks pipelines/)
+    "B007",   # unused loop var (lisibilite)
+    "B008",   # function call in default arg
+    "B904",   # raise ... from - trop verbeux pour log-and-raise
+    "B905",   # zip() without strict= - py310+ default suffit
+    "UP007",  # X | None over Optional[X] - PY311 OK mais pas force partout
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F401", "F811"]

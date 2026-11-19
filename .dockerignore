@@ -1,0 +1,42 @@
+.git
+.gitignore
+.github/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.vscode/
+.idea/
+
+# Secrets
+.env
+.env.*
+secrets/
+*.key
+*.pem
+
+# Donnees et artefacts (montes par bind, pas copies)
+data/raw/*
+data/processed/*
+results/checkpoints/*
+results/figures/*
+results/metrics/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!results/**/.gitkeep
+
+# Logs et checkpoints
+*.log
+*.pt
+*.pth
+*.ckpt
+runs/
+lightning_logs/
+mlruns/
+wandb/

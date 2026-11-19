@@ -1,0 +1,217 @@
+"""API FastAPI servant a la fois l'interface Gradio (route /) et l'API REST
+(routes /api/*, /health, /metrics).
+
+Points d'entree :
+    GET  /                 -> UI Gradio (3 onglets)
+    GET  /docs             -> Swagger UI auto
+    GET  /health           -> statut du service
+    GET  /api/models       -> liste des modeles+horizons dispo
+    POST /api/predict      -> prediction a partir d'une fenetre fournie
+    GET  /metrics          -> metriques format Prometheus (phase C)
+
+Lancement local :
+    uvicorn api:app --host 0.0.0.0 --port 7860
+
+Dans HF Spaces : le Dockerfile execute cette commande au CMD.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import gradio as gr
+import numpy as np
+from db import init_schema, log_prediction, recent_predictions, summary_stats
+from dotenv import load_dotenv
+from drift import compute_input_stats, ks_drift
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import PlainTextResponse
+from predictor import available_checkpoints, predict_window
+
+# Metriques Prometheus (phase C)
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from schemas import (
+    HealthResponse,
+    ModelCard,
+    ModelsResponse,
+    MonitoringResponse,
+    PredictionRow,
+    PredictRequest,
+    PredictResponse,
+)
+from ui import build_demo
+
+PRED_COUNTER = Counter(
+    "ltsf_predictions_total", "Total predictions served", ["model", "pred_len"]
+)
+DRIFT_COUNTER = Counter(
+    "ltsf_drift_detected_total", "Predictions flagged as drifted", ["model"]
+)
+LATENCY_HIST = Histogram(
+    "ltsf_predict_latency_seconds", "Inference latency (s)", ["model"],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+)
+
+# Chargement .env : d'abord dans le CWD (deploiement HF ou test dans ce dossier),
+# puis a la racine du projet (dev local avec .env a la racine).
+_HERE = Path(__file__).resolve().parent
+load_dotenv(_HERE / ".env")
+load_dotenv(_HERE.parent / ".env")
+
+# Logger JSON-friendly
+logging.basicConfig(
+    level=logging.INFO,
+    format='{"ts":"%(asctime)s","level":"%(levelname)s","name":"%(name)s","msg":"%(message)s"}',
+)
+log = logging.getLogger("api")
+
+VERSION = "0.2.0"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup / shutdown hooks."""
+    log.info("API starting")
+    ckpts = available_checkpoints()
+    n_loaded = sum(len(v) for v in ckpts.values())
+    log.info(f"available checkpoints: {n_loaded} across {len(ckpts)} models")
+    # Monitoring DB (phase C) - init idempotent, no-op si pas de DATABASE_URL
+    if init_schema():
+        log.info("db: schema ready, prediction logging enabled")
+    else:
+        log.info("db: logging disabled (no URL or init failed)")
+    yield
+    log.info("API shutting down")
+
+
+app = FastAPI(
+    title="LTSF Transformers",
+    description="Serving + comparison UI + MLOps monitoring",
+    version=VERSION,
+    lifespan=lifespan,
+)
+
+
+# -----------------------------------------------------------------------------
+# API REST
+# -----------------------------------------------------------------------------
+@app.get("/health", response_model=HealthResponse, tags=["ops"])
+def health():
+    ckpts = available_checkpoints()
+    n_loaded = sum(len(v) for v in ckpts.values())
+    return HealthResponse(status="ok", version=VERSION, loaded_models=n_loaded)
+
+
+@app.get("/api/models", response_model=ModelsResponse, tags=["inference"])
+def list_models():
+    ckpts = available_checkpoints()
+    cards = [ModelCard(name=name, pred_lens=hs) for name, hs in ckpts.items()]
+    return ModelsResponse(
+        models=cards,
+        default_model="PatchTST" if "PatchTST" in ckpts else next(iter(ckpts), ""),
+        default_pred_len=96,
+    )
+
+
+@app.post("/api/predict", response_model=PredictResponse, tags=["inference"])
+def predict(req: PredictRequest):
+    t0 = time.perf_counter()
+    try:
+        window = np.asarray(req.window, dtype=np.float32)
+        result = predict_window(req.model, req.pred_len, window)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    latency_s = time.perf_counter() - t0
+    latency_ms = latency_s * 1000.0
+
+    # Metriques + drift (best-effort : n'empechent pas le retour)
+    try:
+        PRED_COUNTER.labels(model=req.model, pred_len=str(req.pred_len)).inc()
+        LATENCY_HIST.labels(model=req.model).observe(latency_s)
+    except Exception as e:
+        log.warning(f"metrics bump failed: {e}")
+
+    drift_pvals: dict | None = None
+    drift_flag = False
+    try:
+        drift_pvals, drift_flag = ks_drift(window)
+        if drift_flag:
+            DRIFT_COUNTER.labels(model=req.model).inc()
+    except Exception as e:
+        log.warning(f"drift check failed: {e}")
+
+    # Log DB (best-effort)
+    try:
+        log_prediction(
+            model=req.model,
+            pred_len=req.pred_len,
+            latency_ms=round(latency_ms, 2),
+            input_stats=compute_input_stats(window),
+            output_stats=compute_input_stats(result["prediction"]),
+            drift_pvalues=drift_pvals,
+            drift_flag=drift_flag,
+            alert=None,
+        )
+    except Exception as e:
+        log.warning(f"db log failed: {e}")
+
+    log.info(
+        f'predict ok model={req.model} pred_len={req.pred_len} '
+        f'latency_ms={latency_ms:.1f} drift={drift_flag}'
+    )
+    return PredictResponse(
+        model=req.model,
+        pred_len=req.pred_len,
+        features=["HUFL", "HULL", "MUFL", "MULL", "LUFL", "LULL", "OT"],
+        prediction=result["prediction"].tolist(),
+        latency_ms=round(latency_ms, 2),
+        drift_flag=drift_flag,
+        drift_pvalues=drift_pvals,
+    )
+
+
+@app.get("/api/monitoring", response_model=MonitoringResponse, tags=["ops"])
+def monitoring(limit: int = 50):
+    """Dashboard data : totaux + N dernieres predictions (onglet Monitoring)."""
+    stats = summary_stats()
+    rows = recent_predictions(limit=limit)
+    return MonitoringResponse(
+        total=stats["total"],
+        drifted=stats["drifted"],
+        avg_latency_ms=stats["avg_latency_ms"],
+        by_model=stats["by_model"],
+        recent=[
+            PredictionRow(
+                ts=str(r["ts"]),
+                model=r["model"],
+                pred_len=r["pred_len"],
+                latency_ms=r["latency_ms"],
+                drift_flag=r["drift_flag"],
+                alert=r["alert"],
+            )
+            for r in rows
+        ],
+    )
+
+
+@app.get("/metrics", response_class=PlainTextResponse, tags=["ops"])
+def metrics():
+    """Metriques au format Prometheus (compteurs, histogrammes latence)."""
+    body = generate_latest().decode("utf-8")
+    body += (
+        "# HELP ltsf_build_info Build info gauge\n"
+        "# TYPE ltsf_build_info gauge\n"
+        f'ltsf_build_info{{version="{VERSION}"}} 1\n'
+    )
+    return PlainTextResponse(body, media_type=CONTENT_TYPE_LATEST)
+
+
+# -----------------------------------------------------------------------------
+# Montage de l'interface Gradio sur /
+# -----------------------------------------------------------------------------
+demo = build_demo()
+app = gr.mount_gradio_app(app, demo, path="/")

@@ -1,0 +1,65 @@
+name: Deploy to HuggingFace Space
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "huggingface_space/**"
+      - ".github/workflows/deploy-hf.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Push to HF Space
+    runs-on: ubuntu-latest
+    # Deploiement conditionne a la presence du secret HF_TOKEN.
+    # Sans secret -> le job est silencieusement skip (pratique en fork).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.repository == 'niangmamath/projet-ML' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install huggingface_hub
+        run: pip install huggingface_hub==0.36.2
+
+      - name: Upload huggingface_space/ to HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # Variable de depot (settings > Variables, pas Secrets).
+          # Si absente, defaut sur <user HF>/<nom projet>.
+          HF_SPACE_ID: ${{ vars.HF_SPACE_ID || 'Momoniang/projet7-ltsf-transformers' }}
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi, create_repo
+
+          token    = os.environ["HF_TOKEN"]
+          space_id = os.environ["HF_SPACE_ID"]
+          api = HfApi(token=token)
+
+          # S'assure que le Space existe (idempotent).
+          create_repo(
+              repo_id=space_id,
+              repo_type="space",
+              space_sdk="docker",
+              exist_ok=True,
+              token=token,
+          )
+          print(f"[deploy] push -> {space_id}")
+
+          api.upload_folder(
+              folder_path="huggingface_space",
+              repo_id=space_id,
+              repo_type="space",
+              commit_message=f"CI deploy from {os.environ.get('GITHUB_SHA','?')[:7]}",
+              ignore_patterns=[
+                  "checkpoints/*", "data/__pycache__/*",
+                  "__pycache__/*", "*.pyc", ".env", ".env.*",
+                  "DEPLOY.md",
+              ],
+          )
+          print(f"[deploy] OK https://huggingface.co/spaces/{space_id}")
+          PY

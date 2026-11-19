@@ -1,0 +1,15 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1
+numpy==1.26.4
+pandas==2.2.3
+scikit-learn==1.5.2
+matplotlib==3.9.2
+gradio==5.5.0
+huggingface_hub==0.36.2
+fastapi==0.115.4
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+python-dotenv==1.0.1
+psycopg[binary,pool]==3.2.3
+prometheus-client==0.21.0
+scipy==1.14.1

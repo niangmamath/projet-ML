@@ -1,3 +1,8 @@
+# Secrets & env vars (NEVER commit)
+.env
+.env.*
+!.env.example
+
 # Python
 __pycache__/
 *.py[cod]
@@ -21,6 +26,14 @@ results/checkpoints/*
 !results/checkpoints/.gitkeep
 results/figures/*.png
 results/figures/*.pdf
+
+# Checkpoints (stockes sur HF Hub, pas sur GitHub)
+checkpoints/
+huggingface_space/checkpoints/
+
+# Notebooks jetables
+Untitled.ipynb
+Untitled*.ipynb
 
 # IDE
 .vscode/

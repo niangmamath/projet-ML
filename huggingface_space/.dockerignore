@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.git
+.gitignore
+.venv/
+venv/
+*.log
+
+# Secrets (NEVER bake into image; use HF Space secrets)
+.env
+.env.*
