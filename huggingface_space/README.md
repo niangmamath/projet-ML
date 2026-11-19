@@ -7,7 +7,7 @@ sdk: docker
 app_port: 7860
 pinned: false
 license: mit
-short_description: Comparative study of Transformers for long-term time series forecasting on ETTh1
+short_description: LTSF benchmark - 6 models on ETTh1 + MLOps serving
 ---
 
 # LTSF Transformers — comparison + MLOps serving
