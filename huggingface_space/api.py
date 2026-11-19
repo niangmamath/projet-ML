@@ -72,16 +72,27 @@ VERSION = "0.2.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup / shutdown hooks."""
+    """Startup / shutdown hooks.
+
+    init_schema() tourne en background : si Neon est froid (cold start ~30s),
+    on ne bloque pas le bind du port. Le logging DB s'activera des que
+    le schema est pret, sinon les predictions tournent sans log (best-effort).
+    """
+    import asyncio
     log.info("API starting")
     ckpts = available_checkpoints()
     n_loaded = sum(len(v) for v in ckpts.values())
     log.info(f"available checkpoints: {n_loaded} across {len(ckpts)} models")
-    # Monitoring DB (phase C) - init idempotent, no-op si pas de DATABASE_URL
-    if init_schema():
-        log.info("db: schema ready, prediction logging enabled")
-    else:
-        log.info("db: logging disabled (no URL or init failed)")
+
+    async def _init_db_bg():
+        # to_thread evite de bloquer l'event loop sur le cold start Neon.
+        ok = await asyncio.to_thread(init_schema)
+        if ok:
+            log.info("db: schema ready, prediction logging enabled")
+        else:
+            log.info("db: logging disabled (no URL or init failed)")
+
+    asyncio.create_task(_init_db_bg())
     yield
     log.info("API shutting down")
 

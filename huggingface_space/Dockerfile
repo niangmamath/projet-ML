@@ -31,16 +31,17 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Code applicatif + modules modeles + donnees d'inference.
 # Les checkpoints ne sont PAS embarques : ils sont telecharges au boot depuis
 # le registry HF Hub (MODEL_REPO_ID @ MODEL_VERSION, cf. predictor.py).
-COPY --chown=user api.py app.py predictor.py schemas.py ui.py ./
+COPY --chown=user api.py app.py predictor.py schemas.py ui.py db.py drift.py ./
 COPY --chown=user src ./src
 COPY --chown=user data ./data
 
 # Dossier cache HF (persiste au sein du conteneur pour reutiliser les .pt).
 ENV HF_HOME=/home/user/.cache/huggingface \
     MODEL_REPO_ID=Momoniang/ltsf-transformers-etth1 \
-    MODEL_VERSION=v1.0.0
+    MODEL_VERSION=v1.0.0 \
+    PORT=7860
 
+# HF Spaces -> 7860 (via EXPOSE). Cloud Run / Render -> injectent $PORT (8080 defaut).
+# Le shell form interpole $PORT au runtime avec fallback 7860 pour HF Space.
 EXPOSE 7860
-
-# Uvicorn gere Gradio monte + API REST sur le meme port.
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "7860", "--log-level", "info"]
+CMD uvicorn api:app --host 0.0.0.0 --port ${PORT:-7860} --log-level info
