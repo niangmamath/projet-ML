@@ -133,14 +133,24 @@ curl -X POST http://127.0.0.1:7860/api/predict \
 
 ---
 
-### `GET /api/monitoring?limit=50`
+### `GET /api/monitoring?limit=50` 🔒 admin
 
 Dashboard data : agrégats + N dernières prédictions.
+
+**Authentification** : header `X-Admin-Token` requis, doit matcher la variable d'env `ADMIN_TOKEN` côté serveur.
+
+- `401 Unauthorized` si header absent ou valeur incorrecte
+- `503 Service Unavailable` si `ADMIN_TOKEN` n'est pas configuré côté serveur (fail-closed)
 
 **Paramètres query** :
 | Champ | Type | Défaut |
 |---|---|---|
 | `limit` | int | 50 |
+
+**Exemple** :
+```bash
+curl -H "X-Admin-Token: $ADMIN_TOKEN" "$SPACE/api/monitoring?limit=20"
+```
 
 **Réponse 200** :
 ```json

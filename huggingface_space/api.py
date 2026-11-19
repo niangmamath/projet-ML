@@ -17,6 +17,7 @@ Dans HF Spaces : le Dockerfile execute cette commande au CMD.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,7 +27,7 @@ import numpy as np
 from db import init_schema, log_prediction, recent_predictions, summary_stats
 from dotenv import load_dotenv
 from drift import compute_input_stats, ks_drift
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 from predictor import available_checkpoints, predict_window
 
@@ -185,9 +186,25 @@ def predict(req: PredictRequest):
     )
 
 
+def _check_admin(token: str | None) -> None:
+    """Guard pour endpoints admin. 401 si token manquant/invalide.
+
+    Si ADMIN_TOKEN n'est pas defini, l'endpoint reste ferme (fail-closed).
+    """
+    expected = os.getenv("ADMIN_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=503, detail="Admin endpoints disabled (ADMIN_TOKEN not set)")
+    if not token or token != expected:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Admin-Token")
+
+
 @app.get("/api/monitoring", response_model=MonitoringResponse, tags=["ops"])
-def monitoring(limit: int = 50):
-    """Dashboard data : totaux + N dernieres predictions (onglet Monitoring)."""
+def monitoring(limit: int = 50, x_admin_token: str | None = Header(default=None)):
+    """Dashboard data admin : totaux + N dernieres predictions.
+
+    Protege par header X-Admin-Token (doit matcher la variable d'env ADMIN_TOKEN).
+    """
+    _check_admin(x_admin_token)
     stats = summary_stats()
     rows = recent_predictions(limit=limit)
     return MonitoringResponse(

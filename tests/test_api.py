@@ -55,9 +55,26 @@ def test_predict_endpoint_bad_shape(client):
     assert r.status_code == 422               # validation Pydantic
 
 
-def test_monitoring_endpoint_without_db(client):
-    """Sans DB configuree, l'endpoint doit repondre un dashboard vide (pas 500)."""
+def test_monitoring_requires_admin_token(client, monkeypatch):
+    """Sans ADMIN_TOKEN configure cote env -> 503."""
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
     r = client.get("/api/monitoring")
+    assert r.status_code == 503
+
+
+def test_monitoring_rejects_bad_token(client, monkeypatch):
+    """ADMIN_TOKEN configure mais header absent/incorrect -> 401."""
+    monkeypatch.setenv("ADMIN_TOKEN", "s3cr3t")
+    r = client.get("/api/monitoring")
+    assert r.status_code == 401
+    r = client.get("/api/monitoring", headers={"X-Admin-Token": "wrong"})
+    assert r.status_code == 401
+
+
+def test_monitoring_accepts_good_token(client, monkeypatch):
+    """ADMIN_TOKEN configure + header correct -> 200 (dashboard vide, pas de DB)."""
+    monkeypatch.setenv("ADMIN_TOKEN", "s3cr3t")
+    r = client.get("/api/monitoring", headers={"X-Admin-Token": "s3cr3t"})
     assert r.status_code == 200
     body = r.json()
     assert body["total"] == 0
