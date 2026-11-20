@@ -1,7 +1,9 @@
-"""Interface Gradio a 3 onglets :
-    1. Comparaison sur test set (multi-modeles, avec verite terrain)
-    2. Prevision sur mes donnees (multi-modeles OU 1 modele + seuil d'alerte)
-    3. Monitoring (dashboard admin, lit la base Postgres)
+"""Interface Gradio a 2 onglets :
+    1. Prevision sur mes donnees (multi-modeles OU 1 modele + seuil d'alerte)
+    2. Monitoring (dashboard admin, lit la base Postgres)
+
+Le benchmark test set figure dans le rapport et le README (resultats figes
+calcules a l'entrainement) ; la plateforme sert les cas operationnels.
 
 L'objet `demo` est monte sur FastAPI dans api.py.
 """
@@ -21,8 +23,6 @@ from predictor import (
     INPUT_LEN,
     available_checkpoints,
     last_hours_window,
-    max_window_start,
-    predict_sample,
     predict_window,
 )
 
@@ -38,45 +38,9 @@ MODEL_COLORS = {
     "Autoformer":  "#C0392B",
     "FEDformer":   "#F1C40F",
 }
-DEFAULT_SELECTION = [m for m in ["DLinear", "PatchTST"] if m in MODEL_NAMES] or MODEL_NAMES[:2]
-
-
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
-def _sample_max(pred_len: int) -> int:
-    return max(0, max_window_start(int(pred_len)) - (16 * 30 * 24 - 96))
-
-
-def _plot_multi_pred_vs_truth(
-    results_by_model: dict[str, dict], pred_len: int, feature_idx: int,
-) -> plt.Figure:
-    """Overlay des predictions de plusieurs modeles sur un meme echantillon + verite."""
-    feat_name = FEATURES[feature_idx]
-    any_result = next(iter(results_by_model.values()))
-    ctx = any_result["context"][:, feature_idx]
-    truth = any_result["ground_truth"][:, feature_idx]
-
-    fig, ax = plt.subplots(figsize=(11, 4.5))
-    t_ctx = np.arange(-INPUT_LEN, 0)
-    t_fut = np.arange(0, pred_len)
-    ax.plot(t_ctx, ctx, color="#333", linewidth=1.5, label="contexte")
-    ax.plot(t_fut, truth, color="#000", linewidth=2.2, label="verite")
-    for model_name, res in results_by_model.items():
-        pred = res["prediction"][:, feature_idx]
-        color = MODEL_COLORS.get(model_name, "#888")
-        ax.plot(t_fut, pred, color=color, linewidth=1.6, linestyle="--",
-                label=f"{model_name}")
-    ax.axvline(0, color="black", linewidth=0.5, linestyle=":")
-    ax.set_xlabel("pas horaires (0 = debut de l'horizon)")
-    ax.set_ylabel(feat_name)
-    ax.set_title(f"Comparaison - horizon {pred_len} h - echantillon #{any_result['start_idx']}")
-    ax.legend(loc="upper left", fontsize=9)
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    return fig
-
-
 def _plot_multi_pred_only(
     window: np.ndarray, preds_by_model: dict[str, np.ndarray], feature_idx: int,
     pred_len: int, threshold: float | None, start_ts: pd.Timestamp,
@@ -123,63 +87,7 @@ def _plot_multi_pred_only(
 
 
 # =============================================================================
-# ONGLET 1 : Comparaison des modeles (benchmark test set)
-# =============================================================================
-def run_comparison(selected_models: list[str], pred_len: int, sample_idx: int, feature: str):
-    """Compare 1..N modeles sur un meme echantillon du test set."""
-    if not selected_models:
-        raise gr.Error("Selectionne au moins un modele.")
-    feat_idx = FEATURES.index(feature)
-    results_by_model: dict[str, dict] = {}
-    rows = []
-    for name in selected_models:
-        t0 = time.perf_counter()
-        res = predict_sample(name, int(pred_len), int(sample_idx))
-        latency_ms = (time.perf_counter() - t0) * 1000.0
-        results_by_model[name] = res
-        rows.append({
-            "Modele":       name,
-            "MSE":          round(res["mse"], 4),
-            "MAE":          round(res["mae"], 4),
-            "Latence (ms)": round(latency_ms, 1),
-        })
-    # Classement par MSE croissant + ajout de la colonne rang
-    rows.sort(key=lambda r: r["MSE"])
-    for i, r in enumerate(rows, 1):
-        r["Rang"] = i
-    df = pd.DataFrame(rows, columns=["Rang", "Modele", "MSE", "MAE", "Latence (ms)"])
-    fig = _plot_multi_pred_vs_truth(results_by_model, int(pred_len), feat_idx)
-    best = rows[0]["Modele"]
-    md = (
-        f"**{len(selected_models)} modele(s) compare(s)** sur echantillon #{int(sample_idx)}, "
-        f"horizon `{pred_len}` h, variable affichee `{feature}`.\n\n"
-        f"Meilleur modele (MSE le plus bas sur CET echantillon) : **{best}**. "
-        "Attention : cette mesure porte sur une seule fenetre. Pour le classement global, "
-        "voir onglet 2 ou section 6 du rapport."
-    )
-    return fig, df, md
-
-
-def on_horizons_change(selected_models: list[str], current_pred_len):
-    """Met a jour la liste d'horizons comme l'intersection des modeles selectionnes."""
-    if not selected_models:
-        return gr.update(choices=[96, 192, 336, 720], value=96), gr.update()
-    common = set(CKPTS.get(selected_models[0], [96]))
-    for m in selected_models[1:]:
-        common &= set(CKPTS.get(m, []))
-    common_sorted = sorted(common) if common else [96]
-    value = int(current_pred_len) if int(current_pred_len) in common_sorted else common_sorted[0]
-    return gr.update(choices=common_sorted, value=value), gr.update(
-        maximum=_sample_max(value), value=0
-    )
-
-
-def on_horizon_change(pred_len):
-    return gr.update(maximum=_sample_max(int(pred_len)), value=0)
-
-
-# =============================================================================
-# ONGLET 2 : Utilisation reelle (operateur)
+# ONGLET 1 : Utilisation reelle (operateur)
 # =============================================================================
 def _read_user_csv(file) -> tuple[np.ndarray, pd.Timestamp, str]:
     """Lit un CSV uploade et retourne (window[96,7], last_timestamp, message).
@@ -307,7 +215,7 @@ def run_operator(file, selected_models: list[str], pred_len: int, feature: str,
 
 
 # =============================================================================
-# ONGLET 3 : Monitoring (live - lit la base Postgres via db.py)
+# ONGLET 2 : Monitoring (live - lit la base Postgres via db.py)
 # =============================================================================
 def _monitor_refresh(password: str = "") -> tuple[str, pd.DataFrame, plt.Figure | None]:
     """Appelle la couche DB directement. Gate par ADMIN_TOKEN (admin uniquement)."""
@@ -366,46 +274,17 @@ def _monitor_refresh(password: str = "") -> tuple[str, pd.DataFrame, plt.Figure 
 # =============================================================================
 def build_demo() -> gr.Blocks:
     CSS = ".gradio-container { max-width: 1200px !important; }"
-    default_h = CKPTS.get(MODEL_NAMES[0], [96])[0]
 
-    with gr.Blocks(title="LTSF Transformers - Demo & MLOps", css=CSS) as demo:
+    with gr.Blocks(title="LTSF Transformers - Serving MLOps", css=CSS) as demo:
         gr.Markdown(
-            "# LTSF Transformers - Comparaison & Serving MLOps (ETTh1)\n\n"
-            "Demo multi-onglets : comparaison des 6 modeles sur le test set, prevision "
-            "sur tes propres donnees (operationnel ou comparatif), et dashboard admin."
+            "# LTSF Transformers - Serving MLOps (ETTh1)\n\n"
+            "Plateforme de prevision : charge tes 96 dernieres heures, choisis "
+            "un ou plusieurs modeles, obtiens la prevision + alerte + export CSV. "
+            "La comparaison globale des modeles (MSE/MAE sur le test set) figure "
+            "dans le rapport et le README."
         )
 
-        with gr.Tab("1. Comparaison sur test set"):
-            gr.Markdown(
-                "Evaluation sur le test set ETTh1 : cocher 1 a 6 modeles, choisir un horizon, "
-                "un echantillon et une variable. Les predictions sont superposees et classees "
-                "par MSE croissant sur cet echantillon."
-            )
-            with gr.Row():
-                model_cg = gr.CheckboxGroup(
-                    MODEL_NAMES, value=DEFAULT_SELECTION,
-                    label="Modeles a comparer (1 a 6)",
-                )
-            with gr.Row():
-                horizon_dd = gr.Dropdown(CKPTS.get(DEFAULT_SELECTION[0], [96]),
-                                         value=default_h, label="Horizon (h)")
-                feature_dd = gr.Dropdown(FEATURES, value="OT", label="Variable affichee")
-            sample_sl = gr.Slider(0, _sample_max(default_h), value=0, step=1,
-                                  label="Echantillon du test set")
-            btn = gr.Button("Comparer", variant="primary")
-            plot1 = gr.Plot(label="Contexte + verite + predictions superposees")
-            table1 = gr.Dataframe(label="Classement par MSE (sur cet echantillon)",
-                                  interactive=False, wrap=True)
-            md1 = gr.Markdown()
-
-            model_cg.change(on_horizons_change, inputs=[model_cg, horizon_dd],
-                            outputs=[horizon_dd, sample_sl])
-            horizon_dd.change(on_horizon_change, inputs=horizon_dd, outputs=sample_sl)
-            btn.click(run_comparison,
-                      inputs=[model_cg, horizon_dd, sample_sl, feature_dd],
-                      outputs=[plot1, table1, md1])
-
-        with gr.Tab("2. Prevision sur mes donnees"):
+        with gr.Tab("1. Prevision sur mes donnees"):
             gr.Markdown(
                 "Upload un CSV de tes 96 dernieres heures (colonnes : "
                 f"`{', '.join(FEATURES)}`, +`date` optionnel) ou laisse vide pour utiliser les "
@@ -441,7 +320,7 @@ def build_demo() -> gr.Blocks:
                          inputs=[file_in, op_models, op_horizon, op_feature, th_sl, use_th],
                          outputs=[plot2, status2, alert2, csv_out, cmp_table])
 
-        with gr.Tab("3. Monitoring (admin)"):
+        with gr.Tab("2. Monitoring (admin)"):
             gr.Markdown(
                 "Dashboard live des predictions loguees en base (Postgres Neon). "
                 "**Acces restreint** : saisir le mot de passe admin (variable "
