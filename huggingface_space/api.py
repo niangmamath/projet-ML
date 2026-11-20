@@ -27,7 +27,7 @@ from db import init_schema, recent_predictions, summary_stats
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse
-from predictor import available_checkpoints, predict_and_log
+from predictor import available_checkpoints, model_params, predict_and_log
 
 # Metriques Prometheus (phase C)
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
@@ -120,7 +120,11 @@ def health():
 @app.get("/api/models", response_model=ModelsResponse, tags=["inference"])
 def list_models():
     ckpts = available_checkpoints()
-    cards = [ModelCard(name=name, pred_lens=hs) for name, hs in ckpts.items()]
+    params = model_params()
+    cards = [
+        ModelCard(name=name, pred_lens=hs, n_params=params.get(name))
+        for name, hs in ckpts.items()
+    ]
     return ModelsResponse(
         models=cards,
         default_model="PatchTST" if "PatchTST" in ckpts else next(iter(ckpts), ""),

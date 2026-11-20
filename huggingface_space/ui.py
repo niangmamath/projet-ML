@@ -22,11 +22,13 @@ from predictor import (
     INPUT_LEN,
     available_checkpoints,
     last_hours_window,
+    model_params,
     predict_and_log,
 )
 
 CKPTS = available_checkpoints()
 MODEL_NAMES = list(CKPTS.keys())
+PARAMS = model_params()
 
 # Palette coherente modele -> couleur, partagee entre onglets 1 et 2.
 MODEL_COLORS = {
@@ -141,6 +143,7 @@ def run_operator(file, selected_models: list[str], pred_len: int, feature: str,
         ot_pred = pred_arr[:, FEATURES.index("OT")]
         rows.append({
             "Modele":          name,
+            "Params (M)":      round(PARAMS.get(name, 0) / 1e6, 2),
             "Latence (ms)":    round(latency_ms, 1),
             "Drift (KS)":      "oui" if drift_flag else "non",
             "OT a t+1 h":      round(float(ot_pred[0]), 2),
@@ -205,7 +208,8 @@ def run_operator(file, selected_models: list[str], pred_len: int, feature: str,
         f"Horizon : `{pred_len}` h | Variable affichee : `{feature}`"
     )
     cmp_df = pd.DataFrame(rows, columns=[
-        "Modele", "Latence (ms)", "Drift (KS)", "OT a t+1 h", "OT a t+H", "Amplitude OT",
+        "Modele", "Params (M)", "Latence (ms)", "Drift (KS)",
+        "OT a t+1 h", "OT a t+H", "Amplitude OT",
     ])
     return fig, status_md, alert_md, csv_path, cmp_df
 

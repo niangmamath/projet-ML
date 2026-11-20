@@ -144,6 +144,24 @@ def available_checkpoints() -> dict[str, list[int]]:
     return {m: list(_MANIFEST_HORIZONS) for m in _MANIFEST_MODELS}
 
 
+@lru_cache(maxsize=1)
+def model_params(reference_horizon: int = 96) -> dict[str, int]:
+    """Retourne {model_name: nombre de parametres entrainables} a un horizon de reference.
+
+    L'horizon par defaut (96) sert de "taille nominale" pour la comparaison UI.
+    Note : la derniere couche de projection depend de pred_len, donc le count varie
+    entre horizons (ex. DLinear h=96 = 130k, h=720 = 977k). Voir rapport section 6.2.
+    """
+    out: dict[str, int] = {}
+    for name, builder in MODEL_BUILDERS.items():
+        try:
+            m = builder(reference_horizon)
+            out[name] = sum(p.numel() for p in m.parameters() if p.requires_grad)
+        except Exception as e:
+            log.warning(f"model_params: {name} failed: {e}")
+    return out
+
+
 def _resolve_checkpoint(model_name: str, pred_len: int) -> Path:
     """Localise le .pt a charger : local d'abord, sinon pull depuis HF Hub.
 

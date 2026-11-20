@@ -115,6 +115,7 @@ class HealthResponse(BaseModel):
 class ModelCard(BaseModel):
     name: str
     pred_lens: list[int]
+    n_params: int | None = None     # nb params entrainables a l'horizon 96 (reference)
 
 
 class ModelsResponse(BaseModel):
