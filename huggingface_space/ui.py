@@ -251,9 +251,21 @@ def run_operator(file, selected_models: list[str], pred_len: int, feature: str,
     th = float(threshold) if (use_threshold and single_mode) else None
     fig = _plot_multi_pred_only(window, preds_by_model, feat_idx, int(pred_len), th, last_ts)
 
-    # Mode 1 modele : on prepare alerte textuelle + export CSV
+    # Export CSV : toujours fourni. Format large (wide) : date + 1 colonne par (modele, feature).
+    future_ts = pd.date_range(start=last_ts + timedelta(hours=1), periods=int(pred_len), freq="h")
+    export_df = pd.DataFrame({"date": future_ts})
+    for name, pred_arr in preds_by_model.items():
+        for i, feat in enumerate(FEATURES):
+            export_df[f"{name}_{feat}"] = pred_arr[:, i]
+    tmp_dir = Path(tempfile.gettempdir()) / "ltsf_exports"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    csv_name = ("prediction_export.csv" if single_mode
+                else f"predictions_compare_{len(selected_models)}models.csv")
+    csv_path = str(tmp_dir / csv_name)
+    export_df.to_csv(csv_path, index=False)
+
+    # Alerte textuelle : mode 1 modele uniquement
     alert_md = ""
-    csv_path = None
     if single_mode:
         only_name = selected_models[0]
         only_pred = preds_by_model[only_name]
@@ -276,16 +288,12 @@ def run_operator(file, selected_models: list[str], pred_len: int, feature: str,
                 alert_md = (f"### Aucun depassement prevu\n"
                             f"Modele {only_name} : OT max prevu : **{ot_pred.max():.2f}** "
                             f"(< seuil {th:.1f}).\n")
-        future_ts = pd.date_range(start=last_ts + timedelta(hours=1), periods=int(pred_len), freq="h")
-        export_df = pd.DataFrame(only_pred, columns=FEATURES)
-        export_df.insert(0, "date", future_ts)
-        tmp_dir = Path(tempfile.gettempdir()) / "ltsf_exports"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = str(tmp_dir / "prediction_export.csv")
-        export_df.to_csv(csv_path, index=False)
     else:
-        alert_md = (f"### Mode comparatif ({len(selected_models)} modeles)\n"
-                    f"Seuil et export CSV desactives. Decoche jusqu'a 1 modele pour reactiver.")
+        alert_md = (
+            f"### Mode comparatif ({len(selected_models)} modeles)\n"
+            f"Seuil d'alerte desactive. L'export CSV contient les predictions des "
+            f"{len(selected_models)} modeles (format large : `date` + une colonne par "
+            f"`<Modele>_<Feature>`).")
 
     status_md = (
         f"{info_msg}\n\n"
@@ -427,7 +435,7 @@ def build_demo() -> gr.Blocks:
             alert2 = gr.Markdown()
             cmp_table = gr.Dataframe(label="Comparaison par modele",
                                      interactive=False, wrap=True)
-            csv_out = gr.File(label="Telecharger la prediction (CSV, 1 modele uniquement)")
+            csv_out = gr.File(label="Telecharger la prediction (CSV)")
 
             op_btn.click(run_operator,
                          inputs=[file_in, op_models, op_horizon, op_feature, th_sl, use_th],
