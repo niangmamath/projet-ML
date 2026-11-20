@@ -26,7 +26,7 @@ import numpy as np
 from db import init_schema, recent_predictions, summary_stats
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from predictor import available_checkpoints, predict_and_log
 
 # Metriques Prometheus (phase C)
@@ -269,8 +269,19 @@ def metrics():
     return PlainTextResponse(body, media_type=CONTENT_TYPE_LATEST)
 
 
+_STATIC_DIR = _HERE / "static"
+
+
+@app.get("/admin", include_in_schema=False)
+def admin_page():
+    """Dashboard admin autonome (HTML+JS statique). L'auth se fait cote client
+    via l'endpoint /api/monitoring + header X-Admin-Token : rien de secret dans
+    la page HTML elle-meme, elle est sans valeur pour un visiteur non admin."""
+    return FileResponse(_STATIC_DIR / "admin.html", media_type="text/html")
+
+
 # -----------------------------------------------------------------------------
-# Montage de l'interface Gradio sur /
+# Montage de l'interface Gradio sur /  (DOIT etre dernier : Gradio capture /*)
 # -----------------------------------------------------------------------------
 demo = build_demo()
 app = gr.mount_gradio_app(app, demo, path="/")

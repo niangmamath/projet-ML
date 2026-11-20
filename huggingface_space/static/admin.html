@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LTSF Admin - Monitoring</title>
+  <style>
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --border: #334155;
+      --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+      --ok: #22c55e; --warn: #f59e0b; --bad: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+    }
+    header {
+      padding: 16px 24px; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    header .meta { color: var(--muted); font-size: 13px; }
+    main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+    .login {
+      max-width: 400px; margin: 80px auto; padding: 32px;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    }
+    .login h2 { margin: 0 0 8px; font-size: 20px; }
+    .login p { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+    input[type=password], input[type=text] {
+      width: 100%; padding: 10px 12px; border-radius: 6px;
+      border: 1px solid var(--border); background: #0b1220; color: var(--text);
+      font-size: 14px;
+    }
+    button {
+      padding: 10px 16px; border-radius: 6px; border: 0;
+      background: var(--accent); color: #0b1220; font-weight: 600; cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover { opacity: 0.9; }
+    button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+    .err { color: var(--bad); font-size: 13px; margin-top: 10px; min-height: 18px; }
+
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .kpi {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      padding: 16px;
+    }
+    .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .kpi .value { font-size: 28px; font-weight: 700; margin-top: 6px; }
+    .kpi .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+    .row { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 24px; }
+    @media (max-width: 820px) { .row { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px;
+    }
+    .card h3 { margin: 0 0 12px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    tbody tr:hover { background: rgba(56, 189, 248, 0.05); }
+    .pill { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .pill.ok { background: rgba(34,197,94,.15); color: var(--ok); }
+    .pill.bad { background: rgba(239,68,68,.15); color: var(--bad); }
+
+    .toolbar { display: flex; gap: 10px; align-items: center; }
+    .toolbar .spacer { flex: 1; }
+    .toolbar label { color: var(--muted); font-size: 13px; }
+    .toolbar input[type=checkbox] { margin-right: 6px; }
+
+    #pie { max-width: 220px; margin: 0 auto; display: block; }
+    .legend { display: flex; justify-content: center; gap: 16px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+    .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+    .legend .nominal::before { background: var(--ok); }
+    .legend .drift::before { background: var(--bad); }
+
+    .by-model { display: flex; flex-direction: column; gap: 8px; }
+    .by-model .bar { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+    .by-model .bar .name { width: 90px; }
+    .by-model .bar .track { flex: 1; height: 8px; background: #0b1220; border-radius: 4px; overflow: hidden; }
+    .by-model .bar .fill { height: 100%; background: var(--accent); }
+    .by-model .bar .count { width: 30px; text-align: right; color: var(--muted); }
+
+    .footer { color: var(--muted); font-size: 12px; margin-top: 20px; text-align: center; }
+    .footer a { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<div id="loginView" class="login" hidden>
+  <h2>Monitoring - acces admin</h2>
+  <p>Saisir le token admin (variable d'env <code>ADMIN_TOKEN</code> cote serveur).</p>
+  <form id="loginForm">
+    <input type="password" id="token" placeholder="ADMIN_TOKEN" autocomplete="current-password" required />
+    <div class="err" id="loginErr"></div>
+    <div style="margin-top: 14px; display: flex; gap: 10px;">
+      <button type="submit">Se connecter</button>
+      <a href="/" style="align-self: center; color: var(--muted); font-size: 13px;">Retour UI publique</a>
+    </div>
+  </form>
+</div>
+
+<div id="dashView" hidden>
+  <header>
+    <h1>LTSF - Dashboard admin</h1>
+    <div class="meta">
+      <span id="refreshedAt">-</span>
+      &nbsp;|&nbsp;
+      <label><input type="checkbox" id="autoRefresh" checked />auto 10s</label>
+      &nbsp;|&nbsp;
+      <button class="secondary" id="refreshBtn" style="padding: 4px 10px; font-size: 12px;">Refresh</button>
+      &nbsp;|&nbsp;
+      <button class="secondary" id="logoutBtn" style="padding: 4px 10px; font-size: 12px;">Logout</button>
+    </div>
+  </header>
+  <main>
+    <div class="kpi-grid">
+      <div class="kpi"><div class="label">Predictions totales</div><div class="value" id="kTotal">-</div></div>
+      <div class="kpi"><div class="label">Drift detecte</div><div class="value" id="kDrift">-</div><div class="sub" id="kDriftPct">-</div></div>
+      <div class="kpi"><div class="label">Latence moyenne</div><div class="value" id="kLat">-</div><div class="sub">millisecondes</div></div>
+      <div class="kpi"><div class="label">Modeles actifs</div><div class="value" id="kModels">-</div></div>
+    </div>
+
+    <div class="row">
+      <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">Repartition par modele</h3>
+        </div>
+        <div class="by-model" id="byModel"></div>
+      </div>
+      <div class="card">
+        <h3>Drift sur l'historique</h3>
+        <svg id="pie" viewBox="0 0 100 100"></svg>
+        <div class="legend"><span class="nominal">Nominal</span><span class="drift">Drift</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>50 dernieres predictions</h3>
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Timestamp (UTC)</th><th>Modele</th><th>Horizon</th>
+              <th>Latence (ms)</th><th>Drift</th><th>Alerte</th>
+            </tr>
+          </thead>
+          <tbody id="rows"><tr><td colspan="6" style="color: var(--muted); text-align: center;">Chargement...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <p class="footer">
+      API : <a href="/docs">/docs</a> | Metriques Prometheus : <a href="/metrics">/metrics</a> | UI publique : <a href="/">/</a>
+    </p>
+  </main>
+</div>
+
+<script>
+const KEY = "ltsf_admin_token";
+
+function getToken() { try { return sessionStorage.getItem(KEY); } catch { return null; } }
+function setToken(t) { try { sessionStorage.setItem(KEY, t); } catch {} }
+function clearToken() { try { sessionStorage.removeItem(KEY); } catch {} }
+
+function show(viewId) {
+  document.getElementById("loginView").hidden = viewId !== "loginView";
+  document.getElementById("dashView").hidden  = viewId !== "dashView";
+}
+
+async function fetchMonitoring(token) {
+  const r = await fetch("/api/monitoring?limit=50", { headers: { "X-Admin-Token": token } });
+  if (r.status === 401) throw { kind: "unauthorized" };
+  if (r.status === 503) throw { kind: "disabled", msg: "Monitoring desactive cote serveur (ADMIN_TOKEN non configure)." };
+  if (!r.ok) throw { kind: "other", msg: "Erreur " + r.status };
+  return r.json();
+}
+
+function renderPie(ok, bad) {
+  const total = ok + bad;
+  const svg = document.getElementById("pie");
+  if (total === 0) {
+    svg.innerHTML = '<circle cx="50" cy="50" r="40" fill="#1e293b" stroke="#334155" stroke-width="1"/><text x="50" y="54" text-anchor="middle" fill="#94a3b8" font-size="8">aucune donnee</text>';
+    return;
+  }
+  const ratio = bad / total;
+  if (ratio === 0) { svg.innerHTML = '<circle cx="50" cy="50" r="40" fill="#22c55e"/>'; return; }
+  if (ratio === 1) { svg.innerHTML = '<circle cx="50" cy="50" r="40" fill="#ef4444"/>'; return; }
+  const angle = ratio * 2 * Math.PI;
+  const x = 50 + 40 * Math.sin(angle);
+  const y = 50 - 40 * Math.cos(angle);
+  const large = ratio > 0.5 ? 1 : 0;
+  svg.innerHTML = `
+    <circle cx="50" cy="50" r="40" fill="#22c55e"/>
+    <path d="M50,50 L50,10 A40,40 0 ${large},1 ${x.toFixed(2)},${y.toFixed(2)} Z" fill="#ef4444"/>
+    <text x="50" y="54" text-anchor="middle" fill="#fff" font-size="10" font-weight="700">${(ratio*100).toFixed(1)}%</text>
+  `;
+}
+
+function renderByModel(byModel) {
+  const entries = Object.entries(byModel || {}).sort((a,b) => b[1] - a[1]);
+  const max = entries.length ? entries[0][1] : 1;
+  const host = document.getElementById("byModel");
+  if (!entries.length) { host.innerHTML = '<div style="color: var(--muted); font-size: 13px;">Aucune prediction encore.</div>'; return; }
+  host.innerHTML = entries.map(([m, n]) =>
+    `<div class="bar"><div class="name">${m}</div><div class="track"><div class="fill" style="width:${(n/max*100).toFixed(1)}%"></div></div><div class="count">${n}</div></div>`
+  ).join("");
+}
+
+function renderRows(rows) {
+  const tbody = document.getElementById("rows");
+  if (!rows || !rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color: var(--muted); text-align: center;">Aucune ligne.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td>${r.ts}</td>
+      <td>${r.model}</td>
+      <td>${r.pred_len}</td>
+      <td>${r.latency_ms != null ? r.latency_ms.toFixed(1) : "-"}</td>
+      <td>${r.drift_flag ? '<span class="pill bad">OUI</span>' : '<span class="pill ok">non</span>'}</td>
+      <td>${r.alert ? r.alert : '-'}</td>
+    </tr>
+  `).join("");
+}
+
+async function refresh() {
+  const token = getToken();
+  if (!token) { show("loginView"); return; }
+  try {
+    const data = await fetchMonitoring(token);
+    document.getElementById("kTotal").textContent = data.total;
+    document.getElementById("kDrift").textContent = data.drifted;
+    const pct = data.total ? (data.drifted / data.total * 100).toFixed(1) : "0.0";
+    document.getElementById("kDriftPct").textContent = pct + " % des predictions";
+    document.getElementById("kLat").textContent = data.avg_latency_ms != null ? data.avg_latency_ms.toFixed(1) : "-";
+    document.getElementById("kModels").textContent = Object.keys(data.by_model || {}).length;
+    renderByModel(data.by_model);
+    renderPie(data.total - data.drifted, data.drifted);
+    renderRows(data.recent);
+    document.getElementById("refreshedAt").textContent = "Mis a jour " + new Date().toLocaleTimeString();
+  } catch (e) {
+    if (e.kind === "unauthorized") { clearToken(); show("loginView"); document.getElementById("loginErr").textContent = "Token invalide ou expire."; }
+    else if (e.kind === "disabled") { document.getElementById("rows").innerHTML = `<tr><td colspan="6" style="color: var(--bad); text-align: center;">${e.msg}</td></tr>`; }
+    else { document.getElementById("refreshedAt").textContent = "Erreur: " + (e.msg || "inconnue"); }
+  }
+}
+
+document.getElementById("loginForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const t = document.getElementById("token").value;
+  try {
+    await fetchMonitoring(t);
+    setToken(t); show("dashView"); refresh();
+  } catch (e) {
+    document.getElementById("loginErr").textContent = e.kind === "unauthorized" ? "Token invalide." : (e.msg || "Erreur");
+  }
+});
+
+document.getElementById("logoutBtn").addEventListener("click", () => { clearToken(); show("loginView"); });
+document.getElementById("refreshBtn").addEventListener("click", refresh);
+
+let timer = null;
+function setupAuto() {
+  if (timer) clearInterval(timer);
+  if (document.getElementById("autoRefresh").checked) timer = setInterval(refresh, 10000);
+}
+document.getElementById("autoRefresh").addEventListener("change", setupAuto);
+
+// Boot
+if (getToken()) { show("dashView"); refresh(); setupAuto(); }
+else { show("loginView"); }
+</script>
+
+</body>
+</html>

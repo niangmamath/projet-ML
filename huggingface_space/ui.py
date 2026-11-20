@@ -211,62 +211,7 @@ def run_operator(file, selected_models: list[str], pred_len: int, feature: str,
 
 
 # =============================================================================
-# ONGLET 2 : Monitoring (live - lit la base Postgres via db.py)
-# =============================================================================
-def _monitor_refresh(password: str = "") -> tuple[str, pd.DataFrame, plt.Figure | None]:
-    """Appelle la couche DB directement. Gate par ADMIN_TOKEN (admin uniquement)."""
-    import os as _os
-
-    from db import recent_predictions, summary_stats
-
-    expected = _os.getenv("ADMIN_TOKEN", "")
-    if not expected:
-        return ("### Monitoring\n\n_Monitoring desactive : `ADMIN_TOKEN` non configure._",
-                pd.DataFrame(), None)
-    if password != expected:
-        return ("### Monitoring (admin)\n\n"
-                "_Entre le mot de passe admin ci-dessus puis clique Afficher._",
-                pd.DataFrame(), None)
-
-    stats = summary_stats()
-    rows = recent_predictions(limit=50)
-
-    if stats["total"] == 0:
-        md = (
-            "### Monitoring\n\n"
-            "_Aucune prediction enregistree pour l'instant._\n\n"
-            "Lance quelques predictions dans l'onglet 'Utilisation reelle' ou via "
-            "`POST /api/predict`, puis clique sur 'Rafraichir'."
-        )
-        return md, pd.DataFrame(), None
-
-    avg_lat = stats["avg_latency_ms"]
-    drift_rate = (stats["drifted"] / stats["total"] * 100) if stats["total"] else 0
-    md = (
-        "### Monitoring (live)\n\n"
-        f"- **Predictions totales** : {stats['total']}\n"
-        f"- **Drift detecte** : {stats['drifted']} ({drift_rate:.1f} %)\n"
-        f"- **Latence moyenne** : {avg_lat:.1f} ms\n"
-        f"- **Repartition par modele** : "
-        + ", ".join(f"`{k}`={v}" for k, v in stats["by_model"].items())
-    )
-
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        df["ts"] = pd.to_datetime(df["ts"]).dt.strftime("%Y-%m-%d %H:%M:%S")
-
-    # Camembert drift / non-drift
-    fig, ax = plt.subplots(figsize=(4.5, 4.5))
-    ok = stats["total"] - stats["drifted"]
-    ax.pie([ok, stats["drifted"]], labels=["Nominal", "Drift"],
-           colors=["#2ecc71", "#e74c3c"], autopct="%1.1f%%", startangle=90)
-    ax.set_title("Repartition drift sur l'historique")
-    fig.tight_layout()
-    return md, df, fig
-
-
-# =============================================================================
-# Blocks
+# Blocks  (le monitoring admin vit sur une page separee : GET /admin)
 # =============================================================================
 def build_demo() -> gr.Blocks:
     CSS = ".gradio-container { max-width: 1200px !important; }"
@@ -280,7 +225,7 @@ def build_demo() -> gr.Blocks:
             "dans le rapport et le README."
         )
 
-        with gr.Tab("1. Prevision sur mes donnees"):
+        with gr.Tab("Prevision sur mes donnees"):
             gr.Markdown(
                 "Upload un CSV de tes 96 dernieres heures (colonnes : "
                 f"`{', '.join(FEATURES)}`, +`date` optionnel) ou laisse vide pour utiliser les "
@@ -316,28 +261,10 @@ def build_demo() -> gr.Blocks:
                          inputs=[file_in, op_models, op_horizon, op_feature, th_sl, use_th],
                          outputs=[plot2, status2, alert2, csv_out, cmp_table])
 
-        with gr.Tab("2. Monitoring (admin)"):
-            gr.Markdown(
-                "Dashboard live des predictions loguees en base (Postgres Neon). "
-                "**Acces restreint** : saisir le mot de passe admin (variable "
-                "d'env `ADMIN_TOKEN` cote Space)."
-            )
-            mon_pw = gr.Textbox(label="Mot de passe admin", type="password",
-                                placeholder="ADMIN_TOKEN")
-            mon_btn = gr.Button("Afficher / Rafraichir", variant="primary")
-            mon_md = gr.Markdown()
-            mon_fig = gr.Plot(label="Drift sur l'historique")
-            mon_df = gr.Dataframe(label="50 dernieres predictions",
-                                  headers=["ts", "model", "pred_len",
-                                           "latency_ms", "drift_flag", "alert"],
-                                  wrap=True)
-            mon_btn.click(_monitor_refresh, inputs=mon_pw,
-                          outputs=[mon_md, mon_df, mon_fig])
-
         gr.Markdown(
             "---\n"
             "API REST publique sur `/api/*` (voir [/docs](./docs) pour la "
-            "specification OpenAPI). Monitoring Prometheus sur `/metrics`. "
+            "specification OpenAPI). Metriques Prometheus sur `/metrics`. "
             "Code : [github.com/niangmamath/projet-ML]"
             "(https://github.com/niangmamath/projet-ML)."
         )

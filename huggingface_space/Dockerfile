@@ -34,6 +34,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY --chown=user api.py app.py predictor.py schemas.py ui.py db.py drift.py ./
 COPY --chown=user src ./src
 COPY --chown=user data ./data
+COPY --chown=user static ./static
 
 # Dossier cache HF (persiste au sein du conteneur pour reutiliser les .pt).
 ENV HF_HOME=/home/user/.cache/huggingface \
