@@ -18,18 +18,16 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import gradio as gr
 import numpy as np
-from db import init_schema, log_prediction, recent_predictions, summary_stats
+from db import init_schema, recent_predictions, summary_stats
 from dotenv import load_dotenv
-from drift import compute_input_stats, ks_drift
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import PlainTextResponse
-from predictor import available_checkpoints, predict_window
+from predictor import available_checkpoints, predict_and_log
 
 # Metriques Prometheus (phase C)
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
@@ -132,60 +130,34 @@ def list_models():
 
 @app.post("/api/predict", response_model=PredictResponse, tags=["inference"])
 def predict(req: PredictRequest):
-    t0 = time.perf_counter()
     try:
         window = np.asarray(req.window, dtype=np.float32)
-        result = predict_window(req.model, req.pred_len, window)
+        out = predict_and_log(req.model, req.pred_len, window)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    latency_s = time.perf_counter() - t0
-    latency_ms = latency_s * 1000.0
 
-    # Metriques + drift (best-effort : n'empechent pas le retour)
     try:
         PRED_COUNTER.labels(model=req.model, pred_len=str(req.pred_len)).inc()
-        LATENCY_HIST.labels(model=req.model).observe(latency_s)
+        LATENCY_HIST.labels(model=req.model).observe(out["latency_ms"] / 1000.0)
+        if out["drift_flag"]:
+            DRIFT_COUNTER.labels(model=req.model).inc()
     except Exception as e:
         log.warning(f"metrics bump failed: {e}")
 
-    drift_pvals: dict | None = None
-    drift_flag = False
-    try:
-        drift_pvals, drift_flag = ks_drift(window)
-        if drift_flag:
-            DRIFT_COUNTER.labels(model=req.model).inc()
-    except Exception as e:
-        log.warning(f"drift check failed: {e}")
-
-    # Log DB (best-effort)
-    try:
-        log_prediction(
-            model=req.model,
-            pred_len=req.pred_len,
-            latency_ms=round(latency_ms, 2),
-            input_stats=compute_input_stats(window),
-            output_stats=compute_input_stats(result["prediction"]),
-            drift_pvalues=drift_pvals,
-            drift_flag=drift_flag,
-            alert=None,
-        )
-    except Exception as e:
-        log.warning(f"db log failed: {e}")
-
     log.info(
         f'predict ok model={req.model} pred_len={req.pred_len} '
-        f'latency_ms={latency_ms:.1f} drift={drift_flag}'
+        f'latency_ms={out["latency_ms"]:.1f} drift={out["drift_flag"]}'
     )
     return PredictResponse(
         model=req.model,
         pred_len=req.pred_len,
         features=["HUFL", "HULL", "MUFL", "MULL", "LUFL", "LULL", "OT"],
-        prediction=result["prediction"].tolist(),
-        latency_ms=round(latency_ms, 2),
-        drift_flag=drift_flag,
-        drift_pvalues=drift_pvals,
+        prediction=out["prediction"].tolist(),
+        latency_ms=round(out["latency_ms"], 2),
+        drift_flag=out["drift_flag"],
+        drift_pvalues=out["drift_pvalues"],
     )
 
 
@@ -213,49 +185,36 @@ def compare(req: CompareRequest):
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    # Drift calcule une seule fois sur la fenetre d'entree (identique pour tous les modeles)
+    # Drift : calcule par predict_and_log a chaque appel, identique puisque meme fenetre.
+    # On recupere la valeur du premier modele pour l'exposer au niveau reponse.
     drift_pvals: dict | None = None
     drift_flag = False
-    try:
-        drift_pvals, drift_flag = ks_drift(window)
-    except Exception as e:
-        log.warning(f"drift check failed in /api/compare: {e}")
 
     results: list[CompareModelResult] = []
     for name in req.models:
-        t0 = time.perf_counter()
         try:
-            res = predict_window(name, req.pred_len, window)
+            out = predict_and_log(name, req.pred_len, window)
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=f"{name}: {e}")
         except ValueError as e:
             raise HTTPException(status_code=422, detail=f"{name}: {e}")
-        latency_ms = (time.perf_counter() - t0) * 1000.0
 
         try:
             PRED_COUNTER.labels(model=name, pred_len=str(req.pred_len)).inc()
-            LATENCY_HIST.labels(model=name).observe(latency_ms / 1000.0)
-            if drift_flag:
+            LATENCY_HIST.labels(model=name).observe(out["latency_ms"] / 1000.0)
+            if out["drift_flag"]:
                 DRIFT_COUNTER.labels(model=name).inc()
         except Exception as e:
             log.warning(f"metrics bump failed in /api/compare: {e}")
 
-        try:
-            log_prediction(
-                model=name, pred_len=req.pred_len,
-                latency_ms=round(latency_ms, 2),
-                input_stats=compute_input_stats(window),
-                output_stats=compute_input_stats(res["prediction"]),
-                drift_pvalues=drift_pvals, drift_flag=drift_flag,
-                alert=None,
-            )
-        except Exception as e:
-            log.warning(f"db log failed in /api/compare ({name}): {e}")
+        if drift_pvals is None:
+            drift_pvals = out["drift_pvalues"]
+            drift_flag = out["drift_flag"]
 
         results.append(CompareModelResult(
             model=name,
-            prediction=res["prediction"].tolist(),
-            latency_ms=round(latency_ms, 2),
+            prediction=out["prediction"].tolist(),
+            latency_ms=round(out["latency_ms"], 2),
         ))
 
     log.info(

@@ -231,6 +231,63 @@ def predict_window(
     }
 
 
+def predict_and_log(
+    model_name: str,
+    pred_len: int,
+    window: np.ndarray,
+    alert: str | None = None,
+) -> dict:
+    """Chemin unifie predict + drift KS + log DB (best-effort).
+
+    Appele par /api/predict, /api/compare ET par l'UI Gradio, pour que toute
+    prediction (HTTP ou interface) soit tracee dans la table `predictions`.
+
+    Returns:
+        dict avec cles :
+            prediction      (pred_len, 7)  denormalisee
+            latency_ms      float          temps d'inference mur
+            drift_pvalues   dict | None    p-values KS par feature
+            drift_flag      bool           true si une feature derive (seuil ALPHA)
+    """
+    import time
+
+    t0 = time.perf_counter()
+    res = predict_window(model_name, pred_len, window)
+    latency_ms = (time.perf_counter() - t0) * 1000.0
+    pred = res["prediction"]
+
+    drift_pvals: dict | None = None
+    drift_flag = False
+    try:
+        from drift import ks_drift
+        drift_pvals, drift_flag = ks_drift(window)
+    except Exception as e:
+        log.warning(f"predict_and_log: drift check failed: {e}")
+
+    try:
+        from db import log_prediction
+        from drift import compute_input_stats
+        log_prediction(
+            model=model_name,
+            pred_len=pred_len,
+            latency_ms=round(latency_ms, 2),
+            input_stats=compute_input_stats(window),
+            output_stats=compute_input_stats(pred),
+            drift_pvalues=drift_pvals,
+            drift_flag=drift_flag,
+            alert=alert,
+        )
+    except Exception as e:
+        log.warning(f"predict_and_log: db log failed: {e}")
+
+    return {
+        "prediction": pred,
+        "latency_ms": latency_ms,
+        "drift_pvalues": drift_pvals,
+        "drift_flag": drift_flag,
+    }
+
+
 @torch.no_grad()
 def predict_sample(model_name: str, pred_len: int, sample_idx: int) -> dict:
     """Retourne la prediction pour un echantillon donne du test set.

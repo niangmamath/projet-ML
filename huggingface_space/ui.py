@@ -10,7 +10,6 @@ L'objet `demo` est monte sur FastAPI dans api.py.
 from __future__ import annotations
 
 import tempfile
-import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -23,7 +22,7 @@ from predictor import (
     INPUT_LEN,
     available_checkpoints,
     last_hours_window,
-    predict_window,
+    predict_and_log,
 )
 
 CKPTS = available_checkpoints()
@@ -131,22 +130,19 @@ def run_operator(file, selected_models: list[str], pred_len: int, feature: str,
     preds_by_model: dict[str, np.ndarray] = {}
     rows = []
     for name in selected_models:
-        t0 = time.perf_counter()
-        res = predict_window(name, int(pred_len), window)
-        latency_ms = (time.perf_counter() - t0) * 1000.0
-        pred_arr = res["prediction"]
+        # predict_and_log centralise predict + drift KS + log en base Postgres.
+        # Chaque appel UI est donc trace dans la table `predictions` au meme titre
+        # qu'un appel REST /api/predict -> le dashboard admin reflete tout.
+        out = predict_and_log(name, int(pred_len), window)
+        pred_arr = out["prediction"]
+        latency_ms = out["latency_ms"]
+        drift_flag = out["drift_flag"]
         preds_by_model[name] = pred_arr
-        # KS drift sur la fenetre d'entree (meme calcul que l'API)
-        try:
-            from drift import ks_drift
-            _, drift_flag = ks_drift(window)
-        except Exception:
-            drift_flag = None
         ot_pred = pred_arr[:, FEATURES.index("OT")]
         rows.append({
             "Modele":          name,
             "Latence (ms)":    round(latency_ms, 1),
-            "Drift (KS)":      "oui" if drift_flag else ("non" if drift_flag is False else "n/a"),
+            "Drift (KS)":      "oui" if drift_flag else "non",
             "OT a t+1 h":      round(float(ot_pred[0]), 2),
             "OT a t+H":        round(float(ot_pred[-1]), 2),
             "Amplitude OT":    round(float(ot_pred.max() - ot_pred.min()), 2),
