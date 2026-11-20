@@ -34,6 +34,9 @@ from predictor import available_checkpoints, predict_window
 # Metriques Prometheus (phase C)
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from schemas import (
+    CompareModelResult,
+    CompareRequest,
+    CompareResponse,
     HealthResponse,
     ModelCard,
     ModelsResponse,
@@ -196,6 +199,75 @@ def _check_admin(token: str | None) -> None:
         raise HTTPException(status_code=503, detail="Admin endpoints disabled (ADMIN_TOKEN not set)")
     if not token or token != expected:
         raise HTTPException(status_code=401, detail="Invalid or missing X-Admin-Token")
+
+
+@app.post("/api/compare", response_model=CompareResponse, tags=["inference"])
+def compare(req: CompareRequest):
+    """Compare plusieurs modeles sur une meme fenetre.
+
+    Retourne la prediction et la latence par modele, plus le drift KS sur la fenetre
+    d'entree (commun a tous puisque les donnees d'entree sont identiques).
+    """
+    try:
+        window = np.asarray(req.window, dtype=np.float32)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # Drift calcule une seule fois sur la fenetre d'entree (identique pour tous les modeles)
+    drift_pvals: dict | None = None
+    drift_flag = False
+    try:
+        drift_pvals, drift_flag = ks_drift(window)
+    except Exception as e:
+        log.warning(f"drift check failed in /api/compare: {e}")
+
+    results: list[CompareModelResult] = []
+    for name in req.models:
+        t0 = time.perf_counter()
+        try:
+            res = predict_window(name, req.pred_len, window)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=f"{name}: {e}")
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=f"{name}: {e}")
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+
+        try:
+            PRED_COUNTER.labels(model=name, pred_len=str(req.pred_len)).inc()
+            LATENCY_HIST.labels(model=name).observe(latency_ms / 1000.0)
+            if drift_flag:
+                DRIFT_COUNTER.labels(model=name).inc()
+        except Exception as e:
+            log.warning(f"metrics bump failed in /api/compare: {e}")
+
+        try:
+            log_prediction(
+                model=name, pred_len=req.pred_len,
+                latency_ms=round(latency_ms, 2),
+                input_stats=compute_input_stats(window),
+                output_stats=compute_input_stats(res["prediction"]),
+                drift_pvalues=drift_pvals, drift_flag=drift_flag,
+                alert=None,
+            )
+        except Exception as e:
+            log.warning(f"db log failed in /api/compare ({name}): {e}")
+
+        results.append(CompareModelResult(
+            model=name,
+            prediction=res["prediction"].tolist(),
+            latency_ms=round(latency_ms, 2),
+        ))
+
+    log.info(
+        f"compare ok models={req.models} pred_len={req.pred_len} drift={drift_flag}"
+    )
+    return CompareResponse(
+        pred_len=req.pred_len,
+        features=["HUFL", "HULL", "MUFL", "MULL", "LUFL", "LULL", "OT"],
+        drift_flag=drift_flag,
+        drift_pvalues=drift_pvals,
+        results=results,
+    )
 
 
 @app.get("/api/monitoring", response_model=MonitoringResponse, tags=["ops"])

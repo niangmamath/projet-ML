@@ -133,6 +133,50 @@ curl -X POST http://127.0.0.1:7860/api/predict \
 
 ---
 
+### `POST /api/compare`
+
+Compare plusieurs modèles sur la **même** fenêtre d'entrée. Un seul calcul de drift est effectué (identique pour tous les modèles puisque l'entrée est partagée).
+
+**Corps requête** :
+```json
+{
+  "models": ["DLinear", "PatchTST", "Autoformer"],
+  "pred_len": 96,
+  "window": [[hufl, hull, mufl, mull, lufl, lull, ot], ... 96 lignes ...]
+}
+```
+
+**Paramètres** :
+| Champ | Type | Contraintes |
+|---|---|---|
+| `models` | string[] | 1 à 6 modèles, duplicats ignorés |
+| `pred_len` | int | 96, 192, 336, 720 |
+| `window` | float[96][7] | idem `/api/predict` |
+
+**Réponse 200** :
+```json
+{
+  "pred_len": 96,
+  "features": ["HUFL", "HULL", "MUFL", "MULL", "LUFL", "LULL", "OT"],
+  "drift_flag": false,
+  "drift_pvalues": { "OT": 0.42, "HUFL": 0.31, ... },
+  "results": [
+    {"model": "DLinear",  "prediction": [[...]], "latency_ms": 3.1},
+    {"model": "PatchTST", "prediction": [[...]], "latency_ms": 161.4},
+    {"model": "Autoformer", "prediction": [[...]], "latency_ms": 782.3}
+  ]
+}
+```
+
+**Usage** :
+```bash
+curl -X POST http://127.0.0.1:7860/api/compare \
+  -H "Content-Type: application/json" \
+  -d '{"models":["DLinear","PatchTST"],"pred_len":96,"window":[[...]]}'
+```
+
+---
+
 ### `GET /api/monitoring?limit=50` 🔒 admin
 
 Dashboard data : agrégats + N dernières prédictions.

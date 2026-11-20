@@ -46,6 +46,37 @@ def test_predict_endpoint_valid(client, sample_window):
     assert "drift_pvalues" in body
 
 
+def test_compare_endpoint_valid(client, sample_window):
+    """Compare 2 modeles sur la meme fenetre, verifie structure + drift unique."""
+    r = client.post("/api/compare", json={
+        "models": ["DLinear", "PatchTST"],
+        "pred_len": 96,
+        "window": sample_window.tolist(),
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["pred_len"] == 96
+    assert "drift_flag" in body
+    assert "drift_pvalues" in body
+    assert len(body["results"]) == 2
+    names = {r["model"] for r in body["results"]}
+    assert names == {"DLinear", "PatchTST"}
+    for r_ in body["results"]:
+        assert len(r_["prediction"]) == 96
+        assert len(r_["prediction"][0]) == 7
+        assert r_["latency_ms"] >= 0
+
+
+def test_compare_endpoint_bad_model(client, sample_window):
+    """Un nom de modele hors enum doit etre rejete en 422 par Pydantic."""
+    r = client.post("/api/compare", json={
+        "models": ["DLinear", "NotAModel"],
+        "pred_len": 96,
+        "window": sample_window.tolist(),
+    })
+    assert r.status_code == 422
+
+
 def test_predict_endpoint_bad_shape(client):
     r = client.post("/api/predict", json={
         "model": "DLinear",
